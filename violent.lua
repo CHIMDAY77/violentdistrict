@@ -8,6 +8,8 @@ local Workspace        = game:GetService("Workspace")
 local Camera           = workspace.CurrentCamera
 local LocalPlayer      = Players.LocalPlayer
 local Mouse            = LocalPlayer:GetMouse()
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Lighting         = game:GetService("Lighting")
 
 -- ── SETTINGS ──────────────────────────────────────────────────────────────
 local Settings = {
@@ -30,6 +32,47 @@ local Settings = {
     RageHack_Height   = 4,
     RageHack_ActiveTarget = nil
 }
+
+local VDConfig = {
+    Generator = { AntiFailEnabled = false },
+    Healing = { AntiFailEnabled = false },
+    Visual = { FullbrightEnabled = false },
+    Vault = { AuraEnabled = false }
+}
+
+local VaultAuraSystem = {}
+
+local originalLighting = {
+    Brightness = Lighting.Brightness,
+    ClockTime = Lighting.ClockTime,
+    FogEnd = Lighting.FogEnd,
+    FogStart = Lighting.FogStart,
+    GlobalShadows = Lighting.GlobalShadows,
+    OutdoorAmbient = Lighting.OutdoorAmbient,
+    Ambient = Lighting.Ambient,
+    ColorShift_Top = Lighting.ColorShift_Top,
+    ColorShift_Bottom = Lighting.ColorShift_Bottom,
+    FogColor = Lighting.FogColor,
+    Atmosphere = {},
+    Blur = {},
+    ColorCorrection = {},
+    SunRays = {}
+}
+
+for _, v in pairs(Lighting:GetChildren()) do
+    if v:IsA("Atmosphere") then
+        originalLighting.Atmosphere.Density = v.Density
+        originalLighting.Atmosphere.Offset = v.Offset
+        originalLighting.Atmosphere.Glare = v.Glare
+        originalLighting.Atmosphere.Haze = v.Haze
+    elseif v:IsA("BlurEffect") then
+        originalLighting.Blur.Size = v.Size
+    elseif v:IsA("ColorCorrectionEffect") then
+        originalLighting.ColorCorrection.Enabled = v.Enabled
+    elseif v:IsA("SunRaysEffect") then
+        originalLighting.SunRays.Enabled = v.Enabled
+    end
+end
 
 
 
@@ -56,6 +99,25 @@ local LocalTab = Window:CreateTab("Local Player", "user")
 LocalTab:CreateToggle({ Name = "Hack Speed", CurrentValue = Settings.SpeedHack_Enabled, Flag = "SpeedHack", Callback = function(v) Settings.SpeedHack_Enabled = v end })
 LocalTab:CreateSlider({ Name = "Tốc độ chạy", Range = {16, 60}, Increment = 1, Suffix = "Speed", CurrentValue = Settings.SpeedHack_Speed, Flag = "SpeedSlider", Callback = function(v) Settings.SpeedHack_Speed = v end })
 LocalTab:CreateToggle({ Name = "Infinity Jump", CurrentValue = Settings.InfJump_Enabled, Flag = "InfJump", Callback = function(v) Settings.InfJump_Enabled = v end })
+
+local AntiFailTab = Window:CreateTab("Anti Fail", "shield")
+AntiFailTab:CreateToggle({ Name = "Anti Fail (Gen & Heal)", CurrentValue = VDConfig.Generator.AntiFailEnabled, Flag = "AntiFail", Callback = function(v) 
+    VDConfig.Generator.AntiFailEnabled = v
+    VDConfig.Healing.AntiFailEnabled = v
+end })
+
+local RemoveFogTab = Window:CreateTab("Remove Fog", "sun")
+RemoveFogTab:CreateToggle({ Name = "Remove Fog", CurrentValue = VDConfig.Visual.FullbrightEnabled, Flag = "RemoveFog", Callback = function(v) 
+    VDConfig.Visual.FullbrightEnabled = v
+end })
+
+local VaultAuraTab = Window:CreateTab("Vault Aura", "scan")
+VaultAuraTab:CreateToggle({ Name = "Enable Vault Aura", CurrentValue = VDConfig.Vault.AuraEnabled, Flag = "VaultAura", Callback = function(v)
+    VDConfig.Vault.AuraEnabled = v
+    if VaultAuraSystem.Toggle then
+        VaultAuraSystem.Toggle(v)
+    end
+end })
 
 
 
@@ -488,3 +550,278 @@ Rayfield:Notify({
     Content = "Free script nokey",
     Duration = 3
 })
+
+--// ═══════════════════════════════════════════════════════
+--// ANTI-FAIL SYSTEM (UNIFIED - FIXED!)
+--// ═══════════════════════════════════════════════════════
+local AntiFailHooked = false
+
+local function setupUnifiedAntiFail()
+    if AntiFailHooked then return end
+    
+    task.spawn(function()
+        local success = pcall(function()
+            -- Wait for remotes
+            local Remotes = ReplicatedStorage:WaitForChild("Remotes", 10)
+            if not Remotes then 
+                warn("⚠️ Remotes not found")
+                return 
+            end
+            
+            -- Wait for Events folder (FIXED PATH!)
+            local EventsFolder = ReplicatedStorage:WaitForChild("Events", 10)
+            if not EventsFolder then
+                warn("⚠️ Events folder not found")
+            end
+            
+            -- Generator remotes
+            local GenRemotes = Remotes:WaitForChild("Generator", 5)
+            local GenResultEvent = GenRemotes and GenRemotes:WaitForChild("SkillCheckResultEvent", 5)
+            local GenFailEvent = GenRemotes and GenRemotes:FindFirstChild("SkillCheckFailEvent")
+            
+            -- Healing remotes (FIXED PATH: Events -> Healing)
+            local Healing = EventsFolder and EventsFolder:FindFirstChild("Healing")
+            local HealResultEvent = Healing and Healing:FindFirstChild("SkillCheckResultEvent")
+            local HealFailEvent = Healing and Healing:FindFirstChild("SkillCheckFailEvent")
+            
+            -- Hook metamethod
+            local oldNamecall
+            oldNamecall = hookmetamethod(game, "__namecall", function(self, ...)
+                local method = getnamecallmethod()
+                local args = {...}
+                
+                -- GENERATOR ANTI-FAIL
+                if GenResultEvent and VDConfig.Generator.AntiFailEnabled then
+                    -- Block fail event
+                    if GenFailEvent and self == GenFailEvent and method == "FireServer" then
+                        return nil
+                    end
+                    
+                    -- Force success on generator
+                    if self == GenResultEvent and method == "FireServer" then
+                        if UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) then
+                            args[1] = true
+                            return oldNamecall(self, unpack(args))
+                        else
+                            return nil
+                        end
+                    end
+                end
+                
+                -- HEALING ANTI-FAIL
+                if HealResultEvent and VDConfig.Healing.AntiFailEnabled then
+                    -- Block fail event
+                    if HealFailEvent and self == HealFailEvent and method == "FireServer" then
+                        return nil
+                    end
+                    
+                    -- Force success on healing
+                    if self == HealResultEvent and method == "FireServer" then
+                        args[1] = true
+                        return oldNamecall(self, unpack(args))
+                    end
+                end
+                
+                return oldNamecall(self, ...)
+            end)
+            
+            AntiFailHooked = true
+            print("✅ Unified Anti-Fail System hooked successfully!")
+            if GenResultEvent then print("  ✅ Generator Anti-Fail ready") end
+            if HealResultEvent then print("  ✅ Healing Anti-Fail ready") end
+        end)
+        
+        if not success then
+            warn("⚠️ Anti-Fail System hook failed")
+        end
+    end)
+end
+
+-- Initialize anti-fail system
+setupUnifiedAntiFail()
+
+--// ═══════════════════════════════════════════════════════
+--// REMOVE FOG
+--// ═══════════════════════════════════════════════════════
+task.spawn(function()
+    while true do
+        if VDConfig.Visual.FullbrightEnabled then
+            Lighting.Brightness = 2
+            Lighting.ClockTime = 14
+            Lighting.GlobalShadows = false
+            Lighting.OutdoorAmbient = Color3.fromRGB(128, 128, 128)
+            
+            Lighting.FogStart = 0
+            Lighting.FogEnd = 100000
+            
+            for _, v in pairs(Lighting:GetChildren()) do
+                if v:IsA("Atmosphere") then
+                    v.Density = 0
+                    v.Offset = 0
+                    v.Glare = 0
+                    v.Haze = 0
+                end
+                
+                if v:IsA("BlurEffect") then
+                    v.Size = 0
+                end
+                
+                if v:IsA("ColorCorrectionEffect") then
+                    v.Enabled = false
+                end
+                
+                if v:IsA("SunRaysEffect") then
+                    v.Enabled = false
+                end
+            end
+        else
+            Lighting.Brightness = originalLighting.Brightness
+            Lighting.ClockTime = originalLighting.ClockTime
+            Lighting.FogEnd = originalLighting.FogEnd
+            Lighting.FogStart = originalLighting.FogStart or 0
+            Lighting.GlobalShadows = originalLighting.GlobalShadows
+            Lighting.OutdoorAmbient = originalLighting.OutdoorAmbient
+            
+            for _, v in pairs(Lighting:GetChildren()) do
+                if v:IsA("Atmosphere") and originalLighting.Atmosphere then
+                    v.Density = originalLighting.Atmosphere.Density or 0.3
+                    v.Offset = originalLighting.Atmosphere.Offset or 0.25
+                    v.Glare = originalLighting.Atmosphere.Glare or 0
+                    v.Haze = originalLighting.Atmosphere.Haze or 0
+                end
+                
+                if v:IsA("BlurEffect") and originalLighting.Blur then
+                    v.Size = originalLighting.Blur.Size or 0
+                end
+                
+                if v:IsA("ColorCorrectionEffect") and originalLighting.ColorCorrection then
+                    v.Enabled = originalLighting.ColorCorrection.Enabled or false
+                end
+                
+                if v:IsA("SunRaysEffect") and originalLighting.SunRays then
+                    v.Enabled = originalLighting.SunRays.Enabled or false
+                end
+            end
+        end
+        task.wait(0.5)
+    end
+end)
+
+--// ═══════════════════════════════════════════════════════
+--// VAULT AURA SYSTEM (CENTRALIZED MANAGEMENT)
+--// ═══════════════════════════════════════════════════════
+
+local VAULT_CONFIG = {
+    VAULT_COLOR = Color3.fromRGB(255, 255, 0),
+    WORLD_COLOR = Color3.fromRGB(255, 255, 255),
+    KEYWORDS = {["pallet"] = true, ["window"] = true, ["vault"] = true}
+}
+
+local TrackedObjects = {} 
+local MapFolder = Workspace:FindFirstChild("Map") or Workspace:FindFirstChild("Ingame") or Workspace
+
+local function isValidType(obj)
+    if obj:IsA("BasePart") then
+        return not obj:IsA("Terrain")
+    elseif obj:IsA("Model") then
+        return obj.PrimaryPart ~= nil
+    end
+    return false
+end
+
+local function shouldHighlight(obj)
+    local objName = obj.Name:lower()
+    if VAULT_CONFIG.KEYWORDS[objName] then return true end
+    
+    local parent = obj.Parent
+    if parent then
+        local parentName = parent.Name:lower()
+        if VAULT_CONFIG.KEYWORDS[parentName] then return true end
+    end
+    
+    return false
+end
+
+local function processObject(obj)
+    if TrackedObjects[obj] then return end
+    if not isValidType(obj) then return end
+    if LocalPlayer.Character and obj:IsDescendantOf(LocalPlayer.Character) then return end
+    
+    if shouldHighlight(obj) then
+        local hl = Instance.new("Highlight")
+        hl.Name = "VaultAura"
+        hl.FillColor = VAULT_CONFIG.VAULT_COLOR
+        hl.FillTransparency = 0.8
+        hl.OutlineColor = VAULT_CONFIG.VAULT_COLOR
+        hl.OutlineTransparency = 0.5
+        hl.OutlineThickness = 1
+        hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+        hl.Parent = obj
+        
+        TrackedObjects[obj] = hl
+    end
+end
+
+local function setWorldColor(color)
+    pcall(function()
+        Lighting.Ambient = color
+        Lighting.OutdoorAmbient = color
+        Lighting.ColorShift_Top = color
+        Lighting.ColorShift_Bottom = color
+        Lighting.FogColor = color
+        Lighting.FogEnd = 5000
+    end)
+end
+
+local function initSystem()
+    setWorldColor(VAULT_CONFIG.WORLD_COLOR)
+    
+    local targets = MapFolder:GetDescendants()
+    for i = 1, #targets do
+        processObject(targets[i])
+    end
+end
+
+task.spawn(function()
+    while true do
+        task.wait(5)
+        if VDConfig.Vault.AuraEnabled then
+            for obj, hl in pairs(TrackedObjects) do
+                if not obj or not obj:IsDescendantOf(Workspace) then
+                    if hl then hl:Destroy() end
+                    TrackedObjects[obj] = nil
+                end
+            end
+        end
+    end
+end)
+
+function VaultAuraSystem.Toggle(state)
+    if state then
+        initSystem()
+        VaultAuraSystem.childAddedConnection = MapFolder.DescendantAdded:Connect(function(obj)
+            processObject(obj)
+        end)
+        print("👑 [Absolute Hyper-Optimized] Centralized System Loaded Successfully!")
+    else
+        if VaultAuraSystem.childAddedConnection then
+            VaultAuraSystem.childAddedConnection:Disconnect()
+            VaultAuraSystem.childAddedConnection = nil
+        end
+        for obj, hl in pairs(TrackedObjects) do
+            if hl then hl:Destroy() end
+            TrackedObjects[obj] = nil
+        end
+        
+        pcall(function()
+            Lighting.Ambient = originalLighting.Ambient
+            Lighting.ColorShift_Top = originalLighting.ColorShift_Top
+            Lighting.ColorShift_Bottom = originalLighting.ColorShift_Bottom
+            Lighting.FogColor = originalLighting.FogColor
+            if not VDConfig.Visual.FullbrightEnabled then
+                Lighting.OutdoorAmbient = originalLighting.OutdoorAmbient
+                Lighting.FogEnd = originalLighting.FogEnd
+            end
+        end)
+    end
+end
