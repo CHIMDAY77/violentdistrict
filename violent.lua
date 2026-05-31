@@ -37,10 +37,17 @@ local VDConfig = {
     Generator = { AntiFailEnabled = false },
     Healing = { AntiFailEnabled = false },
     Visual = { FullbrightEnabled = false },
-    Vault = { AuraEnabled = false }
+    Vault = { AuraEnabled = false },
+    HBE = { Enabled = false, Size = 15 }
 }
 
 local VaultAuraSystem = {}
+local HBESystem = {
+    Connections = {},
+    PlayerAddedConn = nil,
+    PlayerRemovingConn = nil,
+    CharParent = nil
+}
 
 local originalLighting = {
     Brightness = Lighting.Brightness,
@@ -117,6 +124,17 @@ VaultAuraTab:CreateToggle({ Name = "Enable Vault Aura", CurrentValue = VDConfig.
     if VaultAuraSystem.Toggle then
         VaultAuraSystem.Toggle(v)
     end
+end })
+
+local HBETab = Window:CreateTab("Hitbox Expander", "crosshair")
+HBETab:CreateToggle({ Name = "Enable HBE", CurrentValue = VDConfig.HBE.Enabled, Flag = "HBE_Toggle", Callback = function(v)
+    VDConfig.HBE.Enabled = v
+    if HBESystem.Toggle then
+        HBESystem.Toggle(v)
+    end
+end })
+HBETab:CreateSlider({ Name = "Hitbox Size", Range = {2, 50}, Increment = 1, Suffix = "Studs", CurrentValue = VDConfig.HBE.Size, Flag = "HBE_Size", Callback = function(v)
+    VDConfig.HBE.Size = v
 end })
 
 
@@ -823,5 +841,112 @@ function VaultAuraSystem.Toggle(state)
                 Lighting.FogEnd = originalLighting.FogEnd
             end
         end)
+    end
+end
+
+--// ═══════════════════════════════════════════════════════
+--// HITBOX EXPANDER (HBE) SYSTEM
+--// ═══════════════════════════════════════════════════════
+pcall(function()
+    local mt = getrawmetatable(game)
+    setreadonly(mt, false)
+    local old = mt.__index
+    mt.__index = function(Self, Key)
+        if tostring(Self) == "HumanoidRootPart" and tostring(Key) == "Size" then
+            return Vector3.new(2,2,1)
+        end
+        return old(Self, Key)
+    end
+    setreadonly(mt, true)
+end)
+
+local function GetCharParentHBE()
+    local charParent
+    if not LocalPlayer.Character then
+        LocalPlayer.CharacterAdded:Wait()
+    end
+    for _, char in pairs(workspace:GetDescendants()) do
+        if string.find(char.Name, LocalPlayer.Name) and char:FindFirstChild("Humanoid") then
+            charParent = char.Parent
+            break
+        end
+    end
+    return charParent
+end
+
+local function AssignHitboxesHBE(player)
+    if player == LocalPlayer then return end
+
+    if HBESystem.Connections[player] then
+        HBESystem.Connections[player]:Disconnect()
+        HBESystem.Connections[player] = nil
+    end
+
+    local hitbox_connection
+    hitbox_connection = RunService.RenderStepped:Connect(function()
+        if not HBESystem.CharParent then return end
+
+        local char = HBESystem.CharParent:FindFirstChild(player.Name)
+        if VDConfig.HBE.Enabled then
+            local hitboxSize = Vector3.new(VDConfig.HBE.Size, VDConfig.HBE.Size, VDConfig.HBE.Size)
+            local hitboxColor = Color3.fromRGB(255,0,0)
+            if char and char:FindFirstChild("HumanoidRootPart") and (char.HumanoidRootPart.Size ~= hitboxSize or char.HumanoidRootPart.Color ~= hitboxColor) then
+                char.HumanoidRootPart.Size = hitboxSize
+                char.HumanoidRootPart.Color = hitboxColor
+                char.HumanoidRootPart.CanCollide = false
+                char.HumanoidRootPart.Transparency = 0.5
+            end
+        else
+            hitbox_connection:Disconnect()
+            HBESystem.Connections[player] = nil
+            if char and char:FindFirstChild("HumanoidRootPart") then
+                char.HumanoidRootPart.Size = Vector3.new(2,2,1)
+                char.HumanoidRootPart.Transparency = 1
+            end
+        end
+    end)
+    HBESystem.Connections[player] = hitbox_connection
+end
+
+function HBESystem.Toggle(state)
+    VDConfig.HBE.Enabled = state
+    
+    if state then
+        task.spawn(function()
+            if not HBESystem.CharParent then
+                HBESystem.CharParent = GetCharParentHBE()
+            end
+            
+            if not VDConfig.HBE.Enabled then return end
+            
+            for _, player in ipairs(Players:GetPlayers()) do
+                AssignHitboxesHBE(player)
+            end
+            
+            if not HBESystem.PlayerAddedConn then
+                HBESystem.PlayerAddedConn = Players.PlayerAdded:Connect(function(player)
+                    if VDConfig.HBE.Enabled then
+                        AssignHitboxesHBE(player)
+                    end
+                end)
+            end
+            if not HBESystem.PlayerRemovingConn then
+                HBESystem.PlayerRemovingConn = Players.PlayerRemoving:Connect(function(player)
+                    if HBESystem.Connections[player] then
+                        HBESystem.Connections[player]:Disconnect()
+                        HBESystem.Connections[player] = nil
+                    end
+                end)
+            end
+        end)
+    else
+        if HBESystem.PlayerAddedConn then
+            HBESystem.PlayerAddedConn:Disconnect()
+            HBESystem.PlayerAddedConn = nil
+        end
+        if HBESystem.PlayerRemovingConn then
+            HBESystem.PlayerRemovingConn:Disconnect()
+            HBESystem.PlayerRemovingConn = nil
+        end
     end
 end
